@@ -36,6 +36,22 @@
         <div id="header">
             <h1>UHK Shipping progress</h1>
         </div>
+        <div id="foo">
+            <label for="myOrderNumber">My order number</label>
+            <input type="number" id="myOrderNumber" placeholder="My order number" min="0">
+            <br>
+            <label for="type">Prediction type</label>
+            <select id="type">
+                <option value="none">No prediction</option>
+                <option value="avg">Average</option>
+                <option value="avg-optimistic">Average (skip empty)</option>
+                <option value="max">Max</option>
+                <option value="min">Min (skip empty)</option>
+            </select>
+            <br>
+            <label for="historicalDataLimit">Base on last N updates</label>
+            <input id="historicalDataLimit" type="number" value="0" min="0">
+        </div>
         <div id="chart">
             <canvas id="shipping-chart"></canvas>
         </div>
@@ -50,58 +66,19 @@
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@^1"></script>
 
     <script src="data.js"></script>
+    <script src="main.js"></script>
     <script>
-        let labels = [];
-        let datasets = [[], [], []];
-
-        let firstShippedOrder = inputData[0][1];
-
-        for (let i in inputData) {
-            let date = inputData[i][0].split('-');
-
-            labels.push(new Date(parseInt(date[0], 10), parseInt(date[1], 10) - 1, parseInt(date[2], 10)));
-
-            datasets[0].push(inputData[i][1]);
-            datasets[1].push(inputData[i][2]);
-            datasets[2].push(inputData[i][3] !== undefined ? inputData[i][3] : null);
-        }
-
-        const isStalled = function(context) {
-            return context.type === 'data' && context.dataIndex > 0 && context.dataset.data[context.dataIndex] <= context.dataset.data[context.dataIndex - 1];
-        };
-
-        const data = {
-            labels: labels,
-            datasets: [{
-                label: 'Next order',
-                backgroundColor: context => isStalled(context) ? '#8a2c2c' : '#4285f4',
-                borderColor: context => isStalled(context) ? '#8a2c2c' : '#4285f4',
-                pointStyle: context => isStalled(context) ? 'triangle' : 'circle',
-                pointRadius: context => isStalled(context) ? 6 : 3,
-                pointRotation: 180,
-                data: datasets[0],
-                // pointBackgroundColor: datasetsColors,
-            }, {
-                label: 'Latest order',
-                backgroundColor: '#fbbc04',
-                borderColor: '#fbbc04',
-                data: datasets[1],
-            }, {
-                label: 'Next non-black order',
-                backgroundColor: '#ff6d01',
-                borderColor: '#ff6d01',
-                data: datasets[2],
-            }]
-        };
-
         const config = {
             type: 'line',
-            data: data,
             options: {
                 maintainAspectRatio: false,
                 scales: {
                     x: {
-                        type: 'timeseries',
+                        type: 'time',
+                        ticks: {
+                            source: 'labels',
+                        },
+                        offsetAfterAutoskip: true,
                         adapters: {
                             date: {
                                 locale: window.navigator.language,
@@ -118,18 +95,183 @@
                     tooltip: {
                         callbacks: {
                             afterTitle: function (items) {
+                                if (items[0] === undefined || items[1] === undefined) {
+                                    return '';
+                                }
+
                                 return (Math.round(((items[0].raw - firstShippedOrder) / (items[1].raw - firstShippedOrder)) * 100 * 100) / 100) + '%';
                             },
+                            afterLabel: function (item) {
+                                let currentValue = item.raw;
+                                let previousValue = item.dataset.data[item.dataIndex - 1];
+
+                                if (previousValue === undefined) {
+                                    return '';
+                                }
+
+                                return '+' + (currentValue - previousValue);
+                            }
                         },
                     },
                 },
             },
         };
 
-        const myChart = new Chart(
-            document.getElementById('shipping-chart'),
-            config
-        );
+        const myChart = new Chart(document.getElementById('shipping-chart'), config);
+
+        let datasets = new DataSets(myChart);
+
+        let nextOrderSeries = new Series({
+            label: 'Next order',
+            color: context => isStalled(context) ? '#8a2c2c' : '#4285f4',
+            pointStyle: context => isStalled(context) ? 'triangle' : 'circle',
+            pointRadius: context => isStalled(context) ? 6 : 3,
+            pointRotation: 180,
+        });
+
+        let latestOrderSeries = new Series({label: 'Latest order', color: '#fbbc04'});
+        let nextNonBlackOrder = new Series({label: 'Next non-black order', color: '#ff6d01',});
+
+        datasets.addSeries('next', nextOrderSeries);
+        datasets.addSeries('latest', latestOrderSeries);
+        datasets.addSeries('next-non-black', nextNonBlackOrder);
+
+        let firstShippedOrder = inputData[0][1];
+
+        for (let i in inputData) {
+            nextOrderSeries.addValue(inputData[i][0], inputData[i][1]);
+            latestOrderSeries.addValue(inputData[i][0], inputData[i][2]);
+            nextNonBlackOrder.addValue(inputData[i][0], inputData[i][3]);
+        }
+
+        const isStalled = function(context) {
+            return context.type === 'data' && context.dataIndex > 0 && context.dataset.data[context.dataIndex] <= context.dataset.data[context.dataIndex - 1];
+        };
+
+        datasets.render();
+
+        document.getElementById('myOrderNumber').onkeyup = function () {
+            let value = this.value.match(/^\d+$/) ? parseInt(this.value, 10) : NaN;
+
+            if (isNaN(value)) {
+                document.cookie = 'myOrder=';
+
+                datasets.removeSeries('my');
+
+                datasets.render();
+
+                return;
+            }
+
+            let myOrderSeries = datasets.getSeries('my');
+
+            if (myOrderSeries === undefined) {
+                myOrderSeries = new Series({label: 'My order', color: '#4ab04a', radius: 0, hoverRadius: 3})
+                datasets.addSeries('my', myOrderSeries);
+            } else {
+                myOrderSeries.clearData();
+            }
+
+            let allDates;
+            if (datasets.getSeries('prediction') !== undefined) {
+                allDates = datasets.getDates();
+            } else {
+                allDates = datasets.getSeries('next').getDates();
+            }
+
+            allDates.forEach(function (date) {
+                myOrderSeries.addValue(date, value);
+            });
+
+            document.cookie = 'myOrder=' + (isNaN(value) ? '' : value);
+
+            datasets.render();
+        };
+
+        document.getElementById('myOrderNumber').value = document.cookie.split('; ').find(row => row.startsWith('myOrder='))?.split('=')[1];
+        document.getElementById('myOrderNumber').dispatchEvent(new Event('keyup'));
+
+        document.getElementById('type').onchange = function () {
+            if (this.value === 'none') {
+                datasets.removeSeries('prediction');
+
+                datasets.render();
+
+                document.getElementById('myOrderNumber').dispatchEvent(new Event('keyup'));
+
+                return;
+            }
+
+            let historicalData = nextOrderSeries.getData();
+
+            let allDates = nextOrderSeries.getDates();
+            let lastDate = allDates[allDates.length - 1];
+
+            let predictionSeries = datasets.getSeries('prediction');
+
+            if (predictionSeries === undefined) {
+                predictionSeries = new Series({label: 'Prediction', color: '#8f8f8f'});
+                datasets.addSeries('prediction', predictionSeries);
+            } else {
+                predictionSeries.clearData();
+            }
+
+            let lastValue = historicalData[historicalData.length - 1].value;
+            let counted = 0, perDay = 0, prevData;
+
+            let historicalDataLimit = parseInt(document.getElementById('historicalDataLimit').value);
+
+            if (!isNaN(historicalDataLimit) && historicalDataLimit > 0) {
+                historicalData = historicalData.slice(-historicalDataLimit - 1);
+
+                console.log(historicalData);
+            }
+
+            for (let i in historicalData) {
+                if (prevData !== undefined) {
+                    let daysPassed = Math.round((historicalData[i].date - prevData.date) / 1000 / 60 / 60 / 24);
+                    let diff = historicalData[i].value - prevData.value;
+
+                    if (this.value === 'max') {
+                        perDay = Math.max(perDay, diff / daysPassed);
+                    } else if (this.value === 'min') {
+                        if (perDay === 0) {
+                            perDay = diff / daysPassed;
+                        }
+
+                        if (diff / daysPassed > 0) {
+                            perDay = Math.min(perDay, diff / daysPassed);
+                        }
+                    } else if (this.value === 'avg') {
+                        perDay = ((perDay * counted) + diff) / (counted + daysPassed);
+                        counted += daysPassed;
+                    } else if (this.value === 'avg-optimistic') {
+                        if (diff !== 0) {
+                            perDay = ((perDay * counted) + diff) / (counted + daysPassed);
+                            counted += daysPassed;
+                        }
+                    }
+                }
+
+                prevData = historicalData[i];
+            }
+
+            for (let i=0; i<7; ++i) {
+                let date = new Date();
+                date.setTime(lastDate.getTime());
+                date.setDate(lastDate.getDate() + i * 7);
+
+                predictionSeries.addValue(date, Math.round(lastValue + perDay * 7 * i));
+            }
+
+            datasets.render();
+
+            document.getElementById('myOrderNumber').dispatchEvent(new Event('keyup'));
+        };
+
+        document.getElementById('historicalDataLimit').onchange = function () {
+            document.getElementById('type').dispatchEvent(new Event('change'));
+        };
     </script>
 </body>
 </html>
