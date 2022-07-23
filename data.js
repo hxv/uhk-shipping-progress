@@ -1,4 +1,4 @@
-// [date, next order, latest order, next non-black order]
+// [date, next order, latest order, next non-black order, next order without palm rests]
 let inputData = [
     ['2021-10-31', 7947, 11458],
     ['2021-11-07', 7978, 11506],
@@ -39,4 +39,5 @@ let inputData = [
     ['2022-07-03', 11258, 13186],
     ['2022-07-07', 11292, 13196],
     ['2022-07-10', 11292, 13218],
+    ['2022-07-22', 11292, 13282, null, 12353],
 ];
