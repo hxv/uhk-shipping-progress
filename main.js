@@ -89,7 +89,6 @@ class Series {
      */
     addValue(date, value) {
         date = typeof date === "string" ? new Date(date) : date;
-        date.setHours(0, 0, 0);
 
         this.data.push({date: date, value: value});
     }
